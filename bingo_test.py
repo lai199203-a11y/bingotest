@@ -23,8 +23,8 @@ def get_taipei_time():
 
 TARGET_URL = "https://www.pilio.idv.tw/bingo/list.asp"
 
-st.set_page_config(page_title="BINGO AI 策略進化版", layout="wide")
-st.title("🛡️ BINGO 賓果 AI 策略進化 (期號精準對位)")
+st.set_page_config(page_title="BINGO AI 終極穩定版", layout="wide")
+st.title("🛡️ BINGO 賓果 AI 策略進化 (雷達對位修復版)")
 
 if 'history' not in st.session_state: st.session_state.history = []
 
@@ -41,7 +41,9 @@ def get_prediction_by_logic(all_nums, star, limit, logic_type="hot"):
         elif logic_type == "cold": scores[num] += (1 - freq) * 60
         else: scores[num] += 30
             
-    for num in all_nums[:20]: scores[num] += 20
+    # 近 20 期『手感』加權
+    for num in all_nums[:20]: scores[num] += 25 
+    
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     top_candidates = [item[0] for item in sorted_scores[:12]]
     return sorted(random.sample(top_candidates, star))
@@ -60,9 +62,8 @@ def run_strategy_sim(all_raw, star, limit):
     sorted_res = sorted(logic_results, key=lambda x: x['hits'], reverse=True)
     return sorted_res[0]['type'], sorted_res[1]['type']
 
-# --- [3. 強化版抓取：期號對一對一掃描] ---
+# --- [3. 強化版抓取：期號模糊定位技術] ---
 def fetch_raw_page_data():
-    """抓取整個網頁文字與最新期號"""
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
@@ -73,25 +74,44 @@ def fetch_raw_page_data():
         driver.get(TARGET_URL)
         time.sleep(3)
         page_text = driver.find_element("tag name", "body").text
-        # 找出當前最新期號
+        
+        # 找出當前最新期號 (9-10位數)
         issue_match = re.search(r'\b\d{9,10}\b', page_text)
         current_issue = int(issue_match.group()) if issue_match else 0
+        
         # 找出所有數字供分析使用
         all_matches = re.findall(r'\b\d{2}\b', page_text)
         all_nums = [int(n) for n in all_matches if 1 <= int(n) <= 80]
+        
         driver.quit()
         return current_issue, all_nums, page_text
     except: return 0, [], ""
 
 def find_exact_draw_nums(target_issue, page_text):
-    """在網頁文字中定位特定期號的 20 個號碼"""
-    # 尋找 target_issue 後面緊跟著的 20 組兩位數
-    pattern = str(target_issue) + r"[\s\S]*?((?:\b\d{2}\b\s*){20})"
-    match = re.search(pattern, page_text)
-    if match:
-        nums = re.findall(r'\b\d{2}\b', match.group(1))
-        return [int(n) for n in nums]
-    return None
+    """
+    錨點追蹤法：
+    1. 找到期號文字位置
+    2. 往後抓取 400 個字元範圍
+    3. 提取前 20 個兩位數數字
+    """
+    try:
+        issue_str = str(target_issue)
+        if issue_str not in page_text:
+            return None 
+        
+        # 定位期號錨點
+        start_idx = page_text.find(issue_str)
+        # 截取期號後方的數據區 (約 400 字元足以包含 20 顆球)
+        data_block = page_text[start_idx + len(issue_str) : start_idx + 450]
+        
+        # 提取該區塊內所有的兩位數
+        found_nums = re.findall(r'\b\d{2}\b', data_block)
+        
+        if len(found_nums) >= 20:
+            return [int(n) for n in found_nums[:20]]
+        return None
+    except:
+        return None
 
 # --- [4. UI 介面] ---
 st.sidebar.header("⚙️ AI 參數設定")
@@ -107,7 +127,7 @@ col1, col2 = st.columns(2)
 
 with col1:
     if st.button("🚀 啟動雙重預測 (鎖定期號)"):
-        with st.spinner('AI 正在進化策略中...'):
+        with st.spinner('AI 正在計算最強路徑...'):
             curr_issue, all_raw, _ = fetch_raw_page_data()
             if curr_issue > 0:
                 next_issue = curr_issue + 1
@@ -121,10 +141,10 @@ with col1:
                     "時間": now_t,
                     "主推(🥇)": f"{best}: {p1}",
                     "副推(🥈)": f"{second}: {p2}",
-                    "結果狀態": f"⏳ 等待 {next_issue} 期開獎",
+                    "結果狀態": f"⏳ 等待 {next_issue} 期",
                     "raw_p1": p1, "raw_p2": p2, "checked": False
                 })
-                st.success(f"✅ 已鎖定下一期：{next_issue}")
+                st.success(f"✅ 已預約期號：{next_issue}")
                 
                 try:
                     line_bot_api = LineBotApi(LINE_TOKEN)
@@ -133,13 +153,13 @@ with col1:
                 except: pass
 
 with col2:
-    if st.button("🔄 精準對獎 (期號對位)"):
-        with st.spinner('正在核對期號資料...'):
+    if st.button("🔄 精準對獎 (雷達掃描)"):
+        with st.spinner('正在掃描網頁期號...'):
             _, _, page_text = fetch_raw_page_data()
             updated = False
             for record in st.session_state.history:
                 if not record["checked"]:
-                    # 關鍵：只找該紀錄專屬的期號
+                    # 使用錨點追蹤法找獎號
                     exact_nums = find_exact_draw_nums(record["預測期號"], page_text)
                     if exact_nums:
                         h1 = [n for n in record["raw_p1"] if n in exact_nums]
@@ -148,14 +168,14 @@ with col2:
                         record["checked"] = True
                         updated = True
             
-            if updated: st.success("✅ 找到對應期號，對獎完成！")
-            else: st.warning("⌛ 網頁尚未出現預測期號，請稍後再按。")
+            if updated: st.success("✅ 對獎成功！已比對正確期號。")
+            else: st.warning("⌛ 網頁尚未看到該期號，請稍候。")
             st.rerun()
 
-# --- [6. 數據顯示區] ---
+# --- [6. 顯示區] ---
 st.markdown("---")
 if st.session_state.history:
     df = pd.DataFrame(st.session_state.history)
     st.dataframe(df[["預測期號", "時間", "主推(🥇)", "副推(🥈)", "結果狀態"]], use_container_width=True)
 else:
-    st.info("💡 請點擊按鈕開始預測。")
+    st.info("💡 尚未開始，請點擊左側啟動預測。")
